@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+*.db
+*.db-wal
+*.db-shm
+agent_state.db
+.pytest_cache/
+.hypothesis/
+
+# Local Claude Code settings
+.claude/settings.local.json

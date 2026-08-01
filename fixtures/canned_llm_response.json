@@ -1,0 +1,13 @@
+{
+  "_comment": "Deterministic stand-in for a live LLM response, used by --no-llm. The same payload is returned for every ticker, so the pipeline can be exercised end to end without spending tokens.",
+  "events": [
+    {
+      "headline": "Canned event: quarterly results beat expectations",
+      "summary": "Deterministic canned summary used by --no-llm runs. The company reported quarterly results above consensus, driven by stronger product revenue and improving margins. This text does not come from a language model and should never be treated as real analysis.",
+      "category": "earnings_release",
+      "impact_score": 8,
+      "source_urls": [],
+      "market_reaction": null
+    }
+  ]
+}
