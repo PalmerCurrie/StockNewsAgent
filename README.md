@@ -5,6 +5,9 @@ the noise, and sends you a short alert with only the things that actually
 moved. Runs as a short-lived process — start it from cron, a scheduler, or by
 hand.
 
+<img width="864" height="871" alt="image" src="https://github.com/user-attachments/assets/80a43992-89aa-44a1-8bcf-1026fc8ef796" />
+
+
 You need two things: **a list of tickers** and **one LLM API key**.
 
 ## See it work first (no key, no accounts, no network)
