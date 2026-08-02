@@ -1,0 +1,5 @@
+# dispatch.py uses only the standard library for HTTP and JSON. tzdata is here
+# because zoneinfo reads the *system* tz database, which slim Linux images do
+# not always ship -- without it ZoneInfo("America/New_York") raises and the
+# whole DST-proofing argument collapses.
+tzdata>=2026.1

@@ -1,12 +1,11 @@
 """StateStore interface (Requirement 11).
 
-Six named records live here across runs:
+Five named records live here across runs:
   ``already_alerted``    set of Event identity keys, per-key TTL
   ``analyzed_stories``   set of Story keys already sent to the LLM, per-key TTL
   ``suppressed_alert``   Alert blob held over quiet hours
   ``run_lock``           overlap guard, 10-minute TTL
   ``daily_cost_ledger``  per-UTC-date LLM spend counter
-  ``watchlist_cache``    last-known-good Notion watchlist, no TTL
 
 ``already_alerted`` and ``analyzed_stories`` are deliberately separate: the
 first answers "have I already told the user about this?", the second answers
@@ -27,7 +26,6 @@ KEY_ANALYZED_STORIES = "analyzed_stories"
 KEY_SUPPRESSED_ALERT = "suppressed_alert"
 KEY_RUN_LOCK = "run_lock"
 KEY_DAILY_COST_LEDGER = "daily_cost_ledger"  # suffixed with :<UTC date>
-KEY_WATCHLIST_CACHE = "watchlist_cache"
 
 RUN_LOCK_TTL_SECONDS = 600  # 10 minutes (Requirement 2.4)
 

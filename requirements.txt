@@ -1,22 +1,27 @@
 # Stock News Agent runtime dependencies (pinned).
 # Python 3.12+ is assumed: zoneinfo and sqlite3 come from the standard library.
 
+# Market data and news
 yfinance==1.5.2
-# Default LLM provider. openai is kept as an alternate backend.
-anthropic==0.120.0
-openai==2.48.0
 feedparser==6.0.12
-# Loads a local .env for development; real env vars always take precedence.
-python-dotenv==1.2.2
 requests==2.34.2
 beautifulsoup4==4.15.0
+
+# LLM. Only the one matching your `llm_provider` is used at runtime; both are
+# listed so switching providers needs no reinstall.
+anthropic==0.120.0
+openai==2.48.0
+
 pyyaml==6.0.3
 structlog==26.1.0
-croniter==6.2.4
-# Required, not optional: redis is the default State_Store backend, because
-# GitHub Actions runners have no persistent disk between invocations.
-redis==8.0.1
+# Loads a local .env for development; real env vars always take precedence.
+python-dotenv==1.2.2
 
-# Test-only (kept here so `pip install -r requirements.txt` sets up a full dev env).
+# Optional: only for `state_store.type: redis`, which you want when running
+# somewhere with no persistent disk (e.g. a GitHub Actions runner). The default
+# sqlite backend uses the standard library and needs nothing installed.
+# redis==8.0.1
+
+# Test-only.
 pytest==9.1.1
 hypothesis==6.161.5

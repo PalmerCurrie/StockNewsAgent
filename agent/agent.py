@@ -47,8 +47,6 @@ from .state_store.base import (
 )
 from .ticker_utils import MAX_WATCHLIST_SIZE, validate_and_dedupe
 from .time_gate import MAX_HOLD_SECONDS, DeliveryHold, TimeGate
-from .watchlist_source import build_watchlist_source
-from .watchlist_source.base import MissingCredentialError, WatchlistSource, WatchlistUnavailable
 
 COMPONENT = "Agent"
 
@@ -67,7 +65,6 @@ class Agent:
         flags: ModeFlags,
         logger: Logger,
         state_store: StateStore,
-        watchlist_source: WatchlistSource,
         time_gate: TimeGate,
         ingestion: IngestionModule,
         news_fetcher: NewsFetcher,
@@ -83,7 +80,6 @@ class Agent:
         self.flags = flags
         self.logger = logger
         self.store = state_store
-        self.watchlist_source = watchlist_source
         self.time_gate = time_gate
         self.ingestion = ingestion
         self.news = news_fetcher
@@ -143,16 +139,10 @@ class Agent:
                 return EXIT_OK
 
             exit_code = self._run_pipeline(summary, started_at)
-        except WatchlistUnavailable as exc:
-            # Recoverable: no watchlist this run, expected to resolve next run.
-            self.logger.error(
-                COMPONENT, str(exc), error_type="WatchlistUnavailable"
-            )
-            exit_code = EXIT_OK
         except StateStoreUnreachable as exc:
             self.logger.error(COMPONENT, str(exc), error_type="StateStoreUnreachable")
             exit_code = EXIT_CONFIG_ERROR
-        except (MissingCredentialError, MissingAPIKeyError) as exc:
+        except MissingAPIKeyError as exc:
             self.logger.error(COMPONENT, str(exc), error_type="MissingCredential")
             exit_code = EXIT_CONFIG_ERROR
         except Exception as exc:  # noqa: BLE001 - never crash without a run summary
@@ -350,7 +340,8 @@ class Agent:
         if self.fixture is not None:
             raw = [TickerEntry(symbol=s) for s in self.fixture.tickers]
         else:
-            raw = self.watchlist_source.fetch()
+            # Loaded and validated by the ConfigLoader before the run started.
+            raw = list(self.config.watchlist or [])
 
         entries, rejected = validate_and_dedupe(raw)
         for symbol in rejected:
@@ -506,7 +497,6 @@ def build_agent(
         flags=flags,
         logger=logger,
         state_store=state_store,
-        watchlist_source=build_watchlist_source(config, state_store, logger),
         time_gate=TimeGate(config),
         ingestion=IngestionModule(logger),
         news_fetcher=NewsFetcher(config.news_sources, logger),

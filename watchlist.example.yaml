@@ -1,0 +1,18 @@
+# Copy to `watchlist.yaml` and put your tickers here. That file is gitignored,
+# so your watchlist never lands in a commit.
+#
+# The short form is just a list of symbols:
+#
+#   - AAPL
+#   - MSFT
+#
+# Add `group:` to any entry you want labelled as a heading in the alert.
+# Grouped and ungrouped entries can be mixed freely.
+
+- symbol: AAPL
+  group: core holdings
+- symbol: MSFT
+  group: core holdings
+- symbol: NVDA
+  group: watching
+- SPY

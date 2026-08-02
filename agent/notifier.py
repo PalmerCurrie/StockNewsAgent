@@ -184,8 +184,8 @@ def publisher_name(url: str) -> str:
 
 
 def pretty_group(group: str) -> str:
-    """'core_holdings' -> 'CORE HOLDINGS'. The label comes straight from a
-    Notion select property, so it arrives in whatever case was typed there."""
+    """'core_holdings' -> 'CORE HOLDINGS'. The label is whatever `group:` the
+    user typed in the watchlist file, so it arrives in arbitrary case."""
     return group.replace("_", " ").replace("-", " ").upper()
 
 

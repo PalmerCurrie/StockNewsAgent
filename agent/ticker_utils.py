@@ -1,7 +1,7 @@
 """Ticker format validation and watchlist deduplication (Requirement 1.7, 1.10).
 
-Applied uniformly to whatever ``WatchlistSource`` returns, so the static-file
-and Notion paths converge on the same normalized watchlist.
+Applied uniformly to every entry read from the watchlist file, so a symbol
+typed as "aapl", " AAPL " or "AAPL" converges on one normalized ticker.
 """
 
 from __future__ import annotations

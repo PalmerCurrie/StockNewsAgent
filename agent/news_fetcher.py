@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, Optional
+from urllib.parse import urljoin
 from zoneinfo import ZoneInfo
 
 import feedparser
@@ -187,9 +188,15 @@ class YahooFinanceRSSAdapter(_RSSAdapter):
 class FinvizNewsAdapter(NewsSourceAdapter):
     name = "finviz"
 
+    #: Finviz links to its own news pages with a site-relative href. Stored
+    #: verbatim those are unclickable in a delivered alert, and invisible to
+    #: deduplicate_stories, which keys on the exact URL -- so the same article
+    #: arriving from another source under its canonical URL would not match.
+    root_url = "https://finviz.com"
+
     def fetch(self, ticker: str) -> AdapterResult:
         result = AdapterResult()
-        response = self._get(f"https://finviz.com/quote.ashx?t={ticker}")
+        response = self._get(f"{self.root_url}/quote.ashx?t={ticker}")
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
         table = soup.find(id="news-table")
@@ -216,11 +223,13 @@ class FinvizNewsAdapter(NewsSourceAdapter):
                     result.note_failure(row)
                     continue
                 headline = link.get_text(strip=True)
+                href = link.get("href")
                 result.stories.append(
                     Story(
                         ticker=ticker,
                         headline=headline,
-                        url=link.get("href") or self.name,
+                        # urljoin leaves an already-absolute href untouched.
+                        url=urljoin(self.root_url, href) if href else self.name,
                         published_at=published_at,
                         source=self.name,
                         word_count=len(headline.split()),

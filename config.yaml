@@ -1,42 +1,47 @@
 # Stock News Agent configuration.
 #
-# Secrets are NEVER stored here -- they come from environment variables
-# (GitHub Actions repository secrets in the deployed workflow):
-#   OPENAI_API_KEY, NOTION_API_TOKEN, STATE_STORE_REDIS_URL,
-#   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, DISCORD_WEBHOOK_URL,
-#   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_TO
+# Secrets are never stored here -- they are read from environment variables
+# (or a local .env). See .env.example for the full list.
 #
 # Any key below can also be overridden with an AGENT_<KEY> environment
-# variable (e.g. AGENT_IMPACT_THRESHOLD=8, AGENT_STATE_STORE_TYPE=sqlite).
+# variable, e.g. AGENT_IMPACT_THRESHOLD=8 or AGENT_LLM_MODEL=gpt-5-mini.
+# The environment always wins over this file.
 
+# Used for active hours and for the timestamps printed in the alert.
 timezone: America/New_York
 
-watchlist_source: notion # "notion" | "static"
+# Your tickers. Relative paths resolve against this config file's directory.
+watchlist_file: watchlist.yaml
 
-notion:
-  # Per-user, so it is NOT committed here. Set AGENT_NOTION_DATABASE_ID -- as a
-  # GitHub Actions repository variable when deployed, or in .env locally. It is
-  # not a secret (useless without NOTION_API_TOKEN), just yours rather than
-  # everyone's. Find it in the database URL:
-  #   notion.so/<workspace>/<DATABASE_ID>?v=...
-  database_id: ""
-  title_property: "Name" # ticker parsed out of "(TICKER) Company Name"
-  include_property: "Track in Agent" # Checkbox property gating inclusion
-  group_property: null # optional select/status property used as the group label
+# --- What counts as news worth sending ------------------------------------
 
-# Used only when watchlist_source: static (kept for local dev and testing).
-watchlist:
-  - symbol: AAPL
-    group: core_holdings
-  - symbol: TSLA
-    group: watchlist
-  - symbol: MSFT
-    group: core_holdings
-  - symbol: SPY
-    group: macro
+lookback_window_hours: 24 # how far back to look for stories
+price_window_hours: 2 # window used to compute the price move shown in the alert
+impact_threshold: 6 # 1-10; an event must score at least this to be sent
+benchmark_index: SPY # the index each move is compared against
 
-lookback_window_hours: 24
-price_window_hours: 2
+# An event must match one of these AND clear impact_threshold. "other" is
+# included on purpose: it is where the model puts M&A, litigation, executive
+# changes and guidance cuts, which are routinely the most market-moving news
+# there is. On a measured sample run 55% of events landed in "other" -- with it
+# excluded, a 9/10 acquisition was silently discarded. impact_threshold is the
+# filter that should be doing this work. Drop "other" if you want only the
+# structured event types.
+high_impact_categories:
+  - earnings_release
+  - regulatory_ruling
+  - product_launch
+  - analyst_rating_change
+  - macroeconomic_announcement
+  - other
+
+news_sources:
+  - yfinance
+  - google_news
+  - finviz
+  # - yahoo_rss
+
+# --- LLM -------------------------------------------------------------------
 
 # Provider is inferred from the model name ("claude-*" -> anthropic,
 # "gpt-*" -> openai); set llm_provider explicitly to override.
@@ -52,73 +57,41 @@ llm_effort: medium
 # responses truncate mid-answer.
 llm_max_output_tokens: 8000
 
-impact_threshold: 6
-benchmark_index: SPY
+# --- Delivery --------------------------------------------------------------
 
-# An event must match one of these AND clear impact_threshold. "other" is
-# included on purpose: it is where the model puts M&A, litigation, executive
-# changes and guidance cuts, which are routinely the most market-moving news
-# there is. Measured on a sample run, 55% of events landed in "other" -- with it
-# excluded, a 9/10 acquisition was silently discarded. impact_threshold is the
-# filter that should be doing this work. Drop "other" (or override with the
-# AGENT_HIGH_IMPACT_CATEGORIES repository variable) if you want only the four
-# structured event types below.
-high_impact_categories:
-  - earnings_release
-  - regulatory_ruling
-  - product_launch
-  - analyst_rating_change
-  - macroeconomic_announcement
-  - other
+# At least one. Credentials come from the environment; see .env.example.
+channels:
+  - type: telegram
+  # - type: discord
+  # - type: email
 
-# Informational only -- nothing here drives execution.
-#
-# Execution is driven by an external scheduler calling the workflow_dispatch
-# API at 07:45 and 13:45 PT, because GitHub's own `schedule` trigger fires
-# 50-120 minutes late and cannot be corrected for. The agent is then told
-# --deliver-at 08:00 (or 14:00) and holds the finished alert until that exact
-# minute. The long comment in .github/workflows/agent.yml has the measurements.
-#
-# The crons listed below are the workflow's FALLBACK schedule, kept only so a
-# dead external trigger yields a late alert instead of silence. They deliver
-# whenever GitHub gets to them.
-cron_schedule:
-  - "30 16 * * 1-5" # fallback for the 08:00 PT run
-  - "30 22 * * 1-5" # fallback for the 14:00 PT run
-
-# A safety net, not the schedule: the trigger already picks the two exact
-# times. Note this is checked at the START of a run, before any --deliver-at
-# hold, so it gates the fetch rather than the send.
-#
-# It has to admit the primary trigger in both DST regimes (10:45/16:45 ET in
-# summer, 10:45/16:45 ET in winter -- the tz-aware trigger keeps these fixed)
-# AND the fallback crons, which arrive whenever GitHub gets to them: roughly
-# 13:30 ET at the earliest and 19:35 ET at the latest observed. 22:00 leaves
-# the late fallback several hours of slack before the gate would suppress it
-# outright, which is how a late run turns into no run at all.
-#
-# It still blocks a stray manual dispatch at 3am.
+# A safety net, not a schedule -- it only stops a run that fires at a silly
+# hour. Checked at the START of a run. See "Scheduling" in the README for how
+# runs are actually triggered.
 active_hours_start: "08:30"
 active_hours_end: "22:00"
 
-# Deliberately unset. With three hand-picked run times, quiet hours could only
-# silently withhold the evening alert and merge it into the next morning's --
-# the run times already encode when you want to be pinged.
+# Optional. Holds an alert that lands inside this window and merges it into the
+# next one, so an overnight run does not wake you. Leave null if the times you
+# run at already encode when you want to be pinged.
 quiet_hours: null
 
-news_sources:
-  - yfinance
-  - google_news
-  - finviz
+# --- State -----------------------------------------------------------------
 
-channels:
-  - type: telegram
-
+# Remembers which stories were already alerted on and already analyzed, so the
+# 24h lookback does not re-send or re-bill the same news every run.
+#
+#   sqlite  one local file. The default; nothing to sign up for.
+#   redis   for hosts with no persistent disk (e.g. GitHub Actions runners).
+#           Set STATE_STORE_REDIS_URL. Install with: pip install redis
+#   memory  tests only -- disables cross-run dedup.
 state_store:
-  type: redis # "redis" (deployed) | "sqlite" (local dev) | "memory" (tests)
-  path: null # only used when type: sqlite, e.g. ./agent_state.db
+  type: sqlite
+  path: ./agent_state.db
 
-already_alerted_ttl_hours: 168
+already_alerted_ttl_hours: 168 # a story stays "already sent" for a week
+
+# --- Cost ------------------------------------------------------------------
 
 cost:
   max_input_tokens_per_run: 100000

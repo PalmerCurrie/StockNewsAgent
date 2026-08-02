@@ -10,5 +10,8 @@ agent_state.db
 .pytest_cache/
 .hypothesis/
 
-# Local Claude Code settings
-.claude/settings.local.json
+# Your tickers are yours. Start from watchlist.example.yaml.
+watchlist.yaml
+
+# Local editor/agent settings
+.claude/

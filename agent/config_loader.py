@@ -14,14 +14,12 @@ from typing import Any, Callable, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
-from croniter import croniter
 
 from .models import (
     AgentConfig,
     ChannelConfig,
     CostConfig,
     ModelPricing,
-    NotionConfig,
     QuietHoursConfig,
     StateStoreConfig,
     TickerEntry,
@@ -37,8 +35,7 @@ HHMM_PATTERN = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
 SUPPORTED_CHANNEL_TYPES = {"telegram", "discord", "email"}
 SUPPORTED_NEWS_SOURCES = {"yfinance", "google_news", "finviz", "yahoo_rss"}
-SUPPORTED_STATE_STORES = {"redis", "sqlite", "memory"}
-SUPPORTED_WATCHLIST_SOURCES = {"static", "notion"}
+SUPPORTED_STATE_STORES = {"sqlite", "redis", "memory"}
 SUPPORTED_LLM_PROVIDERS = {"anthropic", "openai"}
 SUPPORTED_LLM_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 
@@ -74,7 +71,7 @@ def _as_channels(value: str) -> list[dict]:
 # env var -> (dotted path into the raw config dict, parser)
 ENV_OVERRIDES: dict[str, tuple[str, Callable[[str], Any]]] = {
     "AGENT_TIMEZONE": ("timezone", str),
-    "AGENT_WATCHLIST_SOURCE": ("watchlist_source", str),
+    "AGENT_WATCHLIST_FILE": ("watchlist_file", str),
     "AGENT_LOOKBACK_WINDOW_HOURS": ("lookback_window_hours", _as_int),
     "AGENT_PRICE_WINDOW_HOURS": ("price_window_hours", _as_int),
     "AGENT_LLM_MODEL": ("llm_model", str),
@@ -84,7 +81,6 @@ ENV_OVERRIDES: dict[str, tuple[str, Callable[[str], Any]]] = {
     "AGENT_IMPACT_THRESHOLD": ("impact_threshold", _as_int),
     "AGENT_HIGH_IMPACT_CATEGORIES": ("high_impact_categories", _as_csv),
     "AGENT_BENCHMARK_INDEX": ("benchmark_index", str),
-    "AGENT_CRON_SCHEDULE": ("cron_schedule", str),
     "AGENT_ACTIVE_HOURS_START": ("active_hours_start", str),
     "AGENT_ACTIVE_HOURS_END": ("active_hours_end", str),
     "AGENT_QUIET_HOURS_START": ("quiet_hours.start", str),
@@ -96,11 +92,6 @@ ENV_OVERRIDES: dict[str, tuple[str, Callable[[str], Any]]] = {
     "AGENT_ALREADY_ALERTED_TTL_HOURS": ("already_alerted_ttl_hours", _as_int),
     "AGENT_COST_MAX_INPUT_TOKENS_PER_RUN": ("cost.max_input_tokens_per_run", _as_int),
     "AGENT_COST_DAILY_COST_CAP_USD": ("cost.daily_cost_cap_usd", _as_float),
-    "AGENT_NOTION_DATABASE_ID": ("notion.database_id", str),
-    "AGENT_NOTION_TITLE_PROPERTY": ("notion.title_property", str),
-    "AGENT_NOTION_INCLUDE_PROPERTY": ("notion.include_property", str),
-    "AGENT_NOTION_GROUP_PROPERTY": ("notion.group_property", str),
-    "AGENT_NOTION_TICKER_PATTERN": ("notion.ticker_pattern", str),
 }
 
 
@@ -121,13 +112,61 @@ class ConfigLoader:
 
     def __init__(self, env: Optional[dict[str, str]] = None) -> None:
         self._env = env if env is not None else os.environ
+        #: Problems reading the watchlist file. Held rather than raised so that
+        #: a --backtest, which never uses the watchlist, is not blocked by one.
+        #: validate() reports them only when the run actually needs tickers.
+        self._watchlist_errors: list[str] = []
 
     # -- loading -----------------------------------------------------------
 
     def load(self, path: str) -> AgentConfig:
         raw = self._read_file(path)
         raw = self.apply_env_overrides(raw)
-        return self._build(raw)
+        config = self._build(raw)
+        self._watchlist_errors = []
+        config.watchlist = self._read_watchlist(config.watchlist_file, relative_to=path)
+        return config
+
+    def _read_watchlist(self, path: str, relative_to: str) -> Optional[list[TickerEntry]]:
+        """Load the ticker list from its own file.
+
+        Resolved relative to the config file rather than the process working
+        directory, so `--config /elsewhere/config.yaml` finds the watchlist
+        sitting beside it rather than one in whatever directory you happened to
+        run from.
+        """
+        resolved = path
+        if not os.path.isabs(path):
+            resolved = os.path.join(os.path.dirname(os.path.abspath(relative_to)), path)
+
+        if not os.path.isfile(resolved):
+            self._watchlist_errors.append(
+                f"watchlist_file: {path!r} not found (looked in {resolved!r}). "
+                "Copy watchlist.example.yaml to watchlist.yaml and list your tickers."
+            )
+            return None
+        try:
+            with open(resolved, "r", encoding="utf-8") as handle:
+                data = yaml.safe_load(handle.read())
+        except yaml.YAMLError as exc:
+            self._watchlist_errors.append(f"watchlist_file: {path!r} is not parseable: {exc}")
+            return None
+        except OSError as exc:
+            self._watchlist_errors.append(f"watchlist_file: {path!r} could not be read: {exc}")
+            return None
+
+        # Accept a bare list (`- AAPL`) or a mapping with a `watchlist:` key, so
+        # that a file written either way does what it looks like it should.
+        if isinstance(data, dict):
+            data = data.get("watchlist")
+        if data is None:
+            return []
+        if not isinstance(data, list):
+            self._watchlist_errors.append(
+                f"watchlist_file: {path!r} must contain a list of tickers"
+            )
+            return None
+        return [self._build_ticker_entry(item) for item in data]
 
     def _read_file(self, path: str) -> dict:
         if not os.path.isfile(path):
@@ -166,22 +205,6 @@ class ConfigLoader:
         return merged
 
     def _build(self, raw: dict) -> AgentConfig:
-        watchlist = None
-        if raw.get("watchlist") is not None:
-            watchlist = [self._build_ticker_entry(item) for item in _as_list(raw["watchlist"])]
-
-        notion = None
-        notion_raw = raw.get("notion")
-        if isinstance(notion_raw, dict):
-            defaults = NotionConfig(database_id="")
-            notion = NotionConfig(
-                database_id=str(notion_raw.get("database_id") or ""),
-                title_property=notion_raw.get("title_property") or defaults.title_property,
-                include_property=notion_raw.get("include_property") or defaults.include_property,
-                group_property=notion_raw.get("group_property") or None,
-                ticker_pattern=notion_raw.get("ticker_pattern") or defaults.ticker_pattern,
-            )
-
         quiet_hours = None
         quiet_raw = raw.get("quiet_hours")
         if isinstance(quiet_raw, dict) and (quiet_raw.get("start") or quiet_raw.get("end")):
@@ -190,10 +213,15 @@ class ConfigLoader:
                 end=str(quiet_raw.get("end", "")),
             )
 
+        state_defaults = StateStoreConfig()
         state_raw = raw.get("state_store") or {}
+        state_type = str(state_raw.get("type", state_defaults.type)).lower()
         state_store = StateStoreConfig(
-            type=str(state_raw.get("type", "redis")).lower(),
-            path=state_raw.get("path") or None,
+            type=state_type,
+            # Only default the path for sqlite; a redis or memory store with a
+            # stray path would be confusing rather than helpful.
+            path=state_raw.get("path")
+            or (state_defaults.path if state_type == "sqlite" else None),
         )
 
         cost_raw = raw.get("cost") or {}
@@ -226,9 +254,8 @@ class ConfigLoader:
         defaults = AgentConfig()
         return AgentConfig(
             timezone=str(raw.get("timezone", defaults.timezone)),
-            watchlist_source=str(raw.get("watchlist_source", defaults.watchlist_source)).lower(),
-            watchlist=watchlist,
-            notion=notion,
+            watchlist_file=str(raw.get("watchlist_file", defaults.watchlist_file)),
+            watchlist=None,  # filled in by load(), from watchlist_file
             lookback_window_hours=_coerce_int(raw.get("lookback_window_hours"), 24),
             price_window_hours=_coerce_int(raw.get("price_window_hours"), 2),
             llm_model=str(raw.get("llm_model", defaults.llm_model)),
@@ -239,11 +266,6 @@ class ConfigLoader:
             high_impact_categories=[str(c) for c in _as_list(raw.get("high_impact_categories"))]
             or list(DEFAULT_CATEGORIES),
             benchmark_index=str(raw.get("benchmark_index", defaults.benchmark_index)),
-            cron_schedule=(
-                [str(c) for c in raw["cron_schedule"]]
-                if isinstance(raw.get("cron_schedule"), list)
-                else str(raw.get("cron_schedule", defaults.cron_schedule))
-            ),
             active_hours_start=str(raw.get("active_hours_start", defaults.active_hours_start)),
             active_hours_end=str(raw.get("active_hours_end", defaults.active_hours_end)),
             quiet_hours=quiet_hours,
@@ -270,23 +292,16 @@ class ConfigLoader:
         """Return every validation error (Requirement 10.4 -- report all, then exit).
 
         ``requires_watchlist=False`` for a backtest, which takes its tickers
-        from the fixture and never reaches the watchlist source. Demanding a
-        Notion database id to replay a canned file would make the one command
-        that needs no credentials at all refuse to run without them.
+        from the fixture and never reads the watchlist file. Demanding a
+        watchlist to replay a canned file would make the one command that needs
+        no setup at all refuse to run without it.
         """
         errors: list[str] = []
 
-        if config.watchlist_source not in SUPPORTED_WATCHLIST_SOURCES:
-            errors.append(
-                f"watchlist_source: must be one of {sorted(SUPPORTED_WATCHLIST_SOURCES)}, "
-                f"got {config.watchlist_source!r}"
-            )
-        elif not requires_watchlist:
-            pass
-        elif config.watchlist_source == "static":
-            errors.extend(self._validate_static_watchlist(config))
-        elif config.watchlist_source == "notion":
-            errors.extend(self._validate_notion(config))
+        if requires_watchlist:
+            errors.extend(self._watchlist_errors)
+            if not self._watchlist_errors:
+                errors.extend(self._validate_watchlist(config))
 
         for key, value in (
             ("lookback_window_hours", config.lookback_window_hours),
@@ -315,18 +330,6 @@ class ConfigLoader:
             ZoneInfo(config.timezone)
         except (ZoneInfoNotFoundError, ValueError, TypeError):
             errors.append(f"timezone: {config.timezone!r} is not a valid IANA timezone identifier")
-
-        # Accepts one expression or a list, so it can mirror a workflow that
-        # fires several times a day rather than misreporting one of them.
-        crons = config.cron_schedule if isinstance(config.cron_schedule, list) else [config.cron_schedule]
-        if not crons:
-            errors.append("cron_schedule: must contain at least one cron expression")
-        for entry in crons:
-            cron = str(entry).strip()
-            if len(cron.split()) != 5 or not croniter.is_valid(cron):
-                errors.append(
-                    f"cron_schedule: must be a valid 5-field cron expression, got {cron!r}"
-                )
 
         for channel in config.channels:
             if channel.type not in SUPPORTED_CHANNEL_TYPES:
@@ -399,11 +402,12 @@ class ConfigLoader:
 
         return errors
 
-    def _validate_static_watchlist(self, config: AgentConfig) -> list[str]:
+    def _validate_watchlist(self, config: AgentConfig) -> list[str]:
         errors: list[str] = []
         if not config.watchlist:
             errors.append(
-                "watchlist: required (and non-empty) when watchlist_source is 'static'"
+                f"watchlist_file: {config.watchlist_file!r} is empty -- list at least "
+                f"{MIN_WATCHLIST_SIZE} ticker in it"
             )
             return errors
 
@@ -418,21 +422,6 @@ class ConfigLoader:
                 f"watchlist: must contain between {MIN_WATCHLIST_SIZE} and "
                 f"{MAX_WATCHLIST_SIZE} unique tickers, got {len(valid)}"
             )
-        return errors
-
-    def _validate_notion(self, config: AgentConfig) -> list[str]:
-        errors: list[str] = []
-        if config.notion is None or not config.notion.database_id:
-            errors.append("notion.database_id: required when watchlist_source is 'notion'")
-            return errors
-        try:
-            re.compile(config.notion.ticker_pattern)
-        except re.error as exc:
-            errors.append(f"notion.ticker_pattern: not a valid regex ({exc})")
-        if not config.notion.include_property:
-            errors.append("notion.include_property: must name a Notion checkbox property")
-        if not config.notion.title_property:
-            errors.append("notion.title_property: must name the Notion title property")
         return errors
 
 

@@ -8,7 +8,6 @@ from .base import (
     KEY_DAILY_COST_LEDGER,
     KEY_RUN_LOCK,
     KEY_SUPPRESSED_ALERT,
-    KEY_WATCHLIST_CACHE,
     RUN_LOCK_TTL_SECONDS,
     StateStore,
     StateStoreUnreachable,
@@ -26,7 +25,6 @@ __all__ = [
     "KEY_DAILY_COST_LEDGER",
     "KEY_RUN_LOCK",
     "KEY_SUPPRESSED_ALERT",
-    "KEY_WATCHLIST_CACHE",
     "RUN_LOCK_TTL_SECONDS",
 ]
 

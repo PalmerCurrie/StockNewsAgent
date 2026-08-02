@@ -72,7 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--deliver-tz",
         metavar="IANA_ZONE",
         default=os.environ.get("AGENT_DELIVER_TZ") or None,
-        help="timezone for --deliver-at, e.g. America/Los_Angeles "
+        help="timezone for --deliver-at, e.g. America/New_York "
         "(default: the config file's timezone)",
     )
     return parser

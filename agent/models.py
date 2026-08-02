@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from enum import Enum
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 
 class RunMode(str, Enum):
@@ -71,7 +71,7 @@ def _iso_to_date(value: Any) -> Optional[date]:
 
 @dataclass
 class TickerEntry:
-    """One watchlist entry, from either the static config or Notion."""
+    """One watchlist entry."""
 
     symbol: str
     group: Optional[str] = None
@@ -85,18 +85,9 @@ class TickerEntry:
 
 
 @dataclass
-class NotionConfig:
-    database_id: str
-    title_property: str = "Name"
-    include_property: str = "Track in Agent"
-    group_property: Optional[str] = None
-    ticker_pattern: str = r"\(([A-Z0-9.]{1,10})\)"
-
-
-@dataclass
 class StateStoreConfig:
-    type: str = "redis"  # "redis" (deployed) | "sqlite" (local/dev) | "memory" (tests)
-    path: Optional[str] = None  # sqlite only
+    type: str = "sqlite"  # "sqlite" (default) | "redis" (ephemeral hosts) | "memory" (tests)
+    path: Optional[str] = "./agent_state.db"  # sqlite only
 
 
 @dataclass
@@ -132,9 +123,8 @@ class ChannelConfig:
 @dataclass
 class AgentConfig:
     timezone: str = "America/New_York"
-    watchlist_source: str = "static"
+    watchlist_file: str = "watchlist.yaml"
     watchlist: Optional[list[TickerEntry]] = None
-    notion: Optional[NotionConfig] = None
     lookback_window_hours: int = 24
     price_window_hours: int = 2
     llm_model: str = "claude-opus-5"
@@ -144,7 +134,6 @@ class AgentConfig:
     impact_threshold: int = 6
     high_impact_categories: list[str] = field(default_factory=list)
     benchmark_index: str = "SPY"
-    cron_schedule: Union[str, list[str]] = "*/30 * * * *"  # informational; mirrors the workflow
     active_hours_start: str = "09:30"
     active_hours_end: str = "17:00"
     quiet_hours: Optional[QuietHoursConfig] = None

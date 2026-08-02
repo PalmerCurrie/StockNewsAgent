@@ -1,46 +1,42 @@
 name: Stock News Agent
-
-# HOW THE TIMING WORKS, AND WHY IT IS NOT A CRON
 #
-# GitHub's `schedule` trigger cannot hit a target time. It queues scheduled
-# workflows and creates the run when it has capacity, and the delay is neither
-# small nor something you can subtract out. Measured on this repo:
+# OPTIONAL. Running on GitHub Actions is one deployment choice, not the
+# supported path -- see "Scheduling" in the README. Two things to know before
+# you enable it:
+#
+#   1. Runners have no disk that survives a run, so the default sqlite state
+#      store cannot remember what it already alerted on. This workflow sets
+#      AGENT_STATE_STORE_TYPE=redis; supply STATE_STORE_REDIS_URL (a free
+#      Upstash database is enough). Without it you get the same story every run.
+#
+#   2. On a PUBLIC repo, Actions logs are public. The run summary lists every
+#      ticker processed. Keep the deployment private if your watchlist is not
+#      something you want indexed.
+#
+# TIMING: GitHub's `schedule` trigger cannot hit a target time. It queues
+# scheduled workflows and creates the run when it has capacity. Measured on
+# this project:
 #
 #   cron (UTC)   fired (UTC)              late by
 #   14:00        16:00, 16:04             2h00, 2h04
 #   14:50        16:11, 16:16, 16:26      1h21, 1h26, 1h36
 #   20:50        21:40, 21:49, 21:48      0h50, 0h59, 0h58
 #
-# Note the second block against the first: moving the cron 50 minutes LATER
-# moved the actual fire time only ~15 minutes later. The delay is not a
-# constant, so "ask earlier to compensate" does not work -- an earlier cron on
-# a day the queue happens to be quick just delivers at the wrong hour. Three
-# days at `:50` delivered at 09:14, 09:22 and 09:31 PT against an 08:00 target.
+# Read the second block against the first: moving a cron 50 minutes LATER moved
+# the actual fire time only ~15 minutes. The delay is not a constant, so
+# "ask earlier to compensate" does not work.
 #
-# So the schedule below is NOT the primary trigger. It is a fallback.
-#
-# PRIMARY: an external scheduler calls the workflow_dispatch API at 07:45 and
-# 13:45 PT. A dispatched run is created the instant the API call lands -- there
-# is no queue to wait behind -- so the fire time is exact. It passes deliver_at,
-# and the agent holds the finished alert until that wall-clock minute, which
-# absorbs the 2-8 minute spread in how long a run takes. Net effect: the news is
-# fetched at 07:45 and the message arrives at 08:00:00.
-#
-# Because deliver_at is timezone-aware ("08:00 America/Los_Angeles"), DST needs
-# no seasonal edit. The old chore of adding 1 to each hour field every November
-# is gone -- schedule the external trigger in America/Los_Angeles too and both
-# ends follow DST on their own.
-#
-# FALLBACK: the crons below exist only so that a dead external trigger produces
-# a late alert rather than silence. They pass no deliver_at, so they dispatch as
-# soon as they finish. On a normal day the primary run has already sent
-# everything and cross-run dedup makes the fallback a quiet no-op, which is why
-# it is cheap to leave on. If you start seeing fallback runs actually deliver,
-# the external trigger has stopped firing.
+# A `workflow_dispatch` run has no such queue -- it is created the instant the
+# API call lands. So if you need the alert at a specific minute, have something
+# outside GitHub POST to the dispatch API and pass `deliver_at`; the agent
+# fetches immediately and holds the finished alert until that wall-clock
+# minute. `triggers/railway/` is a worked example. The crons below are then a
+# fallback: they pass no deliver_at, so a dead trigger yields a late alert
+# rather than silence, and cross-run dedup makes them a quiet no-op otherwise.
 on:
   schedule:
-    - cron: "30 16 * * 1-5" # fallback for the 08:00 PT run; lands mid-morning PT
-    - cron: "30 22 * * 1-5" # fallback for the 14:00 PT run; lands late afternoon PT
+    - cron: "50 12 * * 1-5"
+    - cron: "50 18 * * 1-5"
   workflow_dispatch:
     inputs:
       deliver_at:
@@ -50,7 +46,7 @@ on:
       deliver_tz:
         description: "IANA timezone for deliver_at"
         required: false
-        default: "America/Los_Angeles"
+        default: "America/New_York"
       extra_args:
         description: "Extra CLI args (e.g. --test-channels, --dry-run)"
         required: false
@@ -58,8 +54,8 @@ on:
 
 # First line of defence against overlapping runs (e.g. a fallback cron firing
 # while a dispatched run is still holding its alert). The `run_lock` record in
-# the State_Store is still the authoritative guard -- `concurrency` only covers
-# GitHub Actions. The lock TTL is raised to cover the hold; see agent.py.
+# the state store is still the authoritative guard -- `concurrency` only covers
+# GitHub Actions.
 concurrency:
   group: stock-news-agent
   cancel-in-progress: false
@@ -67,7 +63,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    # Longest observed run is ~7.5 min; the delivery hold adds at most 30 min
+    # A run is typically 1-8 minutes; the delivery hold adds at most 30
     # (MAX_HOLD_SECONDS in agent/time_gate.py). 45 leaves room for both.
     timeout-minutes: 45
     steps:
@@ -78,7 +74,17 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - run: pip install -r requirements.txt
+      # redis is commented out of requirements.txt because it is only needed on
+      # a host with no disk, which is exactly what this is.
+      - run: pip install -r requirements.txt redis
+
+      - name: Write the watchlist
+        # Kept in a repository variable rather than committed, so a public repo
+        # does not publish your tickers. Settings -> Secrets and variables ->
+        # Actions -> Variables -> AGENT_WATCHLIST, one `- TICKER` per line.
+        run: printf '%s\n' "$AGENT_WATCHLIST" > watchlist.yaml
+        env:
+          AGENT_WATCHLIST: ${{ vars.AGENT_WATCHLIST }}
 
       - name: Run the agent
         run: python -m agent.main $EXTRA_ARGS
@@ -89,34 +95,24 @@ jobs:
 
           # Empty on a scheduled (fallback) run, because `schedule` carries no
           # inputs -- and empty means "no hold, send as soon as the run
-          # finishes", which is what a fallback should do. Only a dispatched
-          # run sets a target.
+          # finishes", which is what a fallback should do.
           AGENT_DELIVER_AT: ${{ github.event.inputs.deliver_at }}
           AGENT_DELIVER_TZ: ${{ github.event.inputs.deliver_tz }}
 
-          # Optional repository VARIABLES (Settings -> Secrets and variables ->
-          # Actions -> Variables), not secrets. Unset means empty, which the
-          # config loader ignores, so the config.yaml values apply.
-          # Set both to 00:00 / 23:59 to run a live test outside market hours.
+          # Runners have no persistent disk; see the note at the top.
+          AGENT_STATE_STORE_TYPE: redis
+          STATE_STORE_REDIS_URL: ${{ secrets.STATE_STORE_REDIS_URL }}
+
+          # Optional non-secret overrides (Variables tab, not Secrets).
           AGENT_ACTIVE_HOURS_START: ${{ vars.AGENT_ACTIVE_HOURS_START }}
           AGENT_ACTIVE_HOURS_END: ${{ vars.AGENT_ACTIVE_HOURS_END }}
           AGENT_IMPACT_THRESHOLD: ${{ vars.AGENT_IMPACT_THRESHOLD }}
 
-          # Which Notion database holds the watchlist. Not a secret (it is
-          # useless without NOTION_API_TOKEN), but it is per-user, so it lives
-          # in a repository variable rather than in the committed config.yaml.
-          AGENT_NOTION_DATABASE_ID: ${{ vars.AGENT_NOTION_DATABASE_ID }}
-
-          # All of these are repository secrets
-          # (Settings -> Secrets and variables -> Actions). Never commit them.
-          # Default LLM provider. OPENAI_API_KEY is only read when
-          # llm_provider is set to "openai" in config.yaml.
+          # Repository secrets (Settings -> Secrets and variables -> Actions).
+          # Only the LLM key for your configured provider is required, plus at
+          # least one delivery channel.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          NOTION_API_TOKEN: ${{ secrets.NOTION_API_TOKEN }}
-          # Required: runners have no persistent disk, so state must be
-          # external. A free Upstash Redis database is enough.
-          STATE_STORE_REDIS_URL: ${{ secrets.STATE_STORE_REDIS_URL }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}

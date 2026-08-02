@@ -82,7 +82,7 @@ class DeliveryHold:
     is deferred.
 
     Being timezone-aware rather than UTC also means DST needs no seasonal
-    edit: "08:00 America/Los_Angeles" is 08:00 in both PST and PDT.
+    edit: "08:00 America/New_York" is 08:00 in both EST and EDT.
     """
 
     def __init__(self, at: str, tz: str) -> None:
