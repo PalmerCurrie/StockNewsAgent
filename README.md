@@ -5,10 +5,11 @@ the noise, and sends you a short alert with only the things that actually
 moved. Runs as a short-lived process — start it from cron, a scheduler, or by
 hand.
 
-<img width="864" height="871" alt="image" src="https://github.com/user-attachments/assets/80a43992-89aa-44a1-8bcf-1026fc8ef796" />
+<img width="864" height="871" alt="A Stock News Agent alert in Telegram" src="https://github.com/user-attachments/assets/80a43992-89aa-44a1-8bcf-1026fc8ef796" />
 
-
-You need two things: **a list of tickers** and **one LLM API key**.
+You need three things: **a list of tickers**, **one LLM API key**, and **one
+place to send the alert** (a Discord webhook is the quickest — one click, no
+bot). Nothing else: no database to provision, no accounts beyond those two.
 
 ## See it work first (no key, no accounts, no network)
 
@@ -68,14 +69,23 @@ python -m agent.main --dry-run
 That costs a few cents. Default model is `claude-haiku-4-5`, which runs about
 **$0.04 per run** on a dozen tickers.
 
-**3. Somewhere to send it.** Pick at least one and put its credentials in
-`.env`, then list it under `channels:` in `config.yaml`:
+**3. Somewhere to send it.** Pick **one** — you don't need all three. Put its
+credentials in `.env`, then list it under `channels:` in `config.yaml`. All
+three are free; they differ only in how long setup takes.
 
-| Channel | What you need |
-|---|---|
-| Telegram | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — talk to [@BotFather](https://t.me/BotFather), then read the chat id from `https://api.telegram.org/bot<TOKEN>/getUpdates` |
-| Discord | `DISCORD_WEBHOOK_URL` — Server Settings → Integrations → Webhooks |
-| Email | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_TO` |
+| Channel | Env vars | Setup |
+|---|---|---|
+| **Discord** *(quickest)* | `DISCORD_WEBHOOK_URL` | Server Settings → Integrations → Webhooks → New Webhook → Copy Webhook URL. No bot to create. |
+| **Telegram** | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Message [@BotFather](https://t.me/BotFather), send `/newbot`, copy the token. Then message your new bot once and read `result[0].message.chat.id` from `https://api.telegram.org/bot<TOKEN>/getUpdates`. |
+| **Email** | `SMTP_HOST`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_TO` (`SMTP_PORT` defaults to 587) | Your mail provider's SMTP details. Gmail needs an [app password](https://myaccount.google.com/apppasswords), not your account password. |
+
+`config.yaml` ships with `telegram` enabled. If you picked something else,
+change it:
+
+```yaml
+channels:
+  - type: discord
+```
 
 ```bash
 python -m agent.main --test-channels   # sends a canary; non-zero if any channel fails
